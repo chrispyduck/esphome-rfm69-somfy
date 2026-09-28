@@ -4,12 +4,16 @@
 # README for what this component does, why it exists, and how it works internally.
 #
 # WIRING (in addition to the stacked-header SPI pins SCK/MOSI/MISO, which need no
-# extra wires since the Wing plugs straight onto the Feather):
-#   RFM69 Wing "CS"  pad --> Feather "33" pad   (GPIO33)
-#   RFM69 Wing "IRQ" pad --> Feather "27" pad   (GPIO27, used here as RFM69 DIO2,
-#                                                the direct-modulation data pin)
-#   RFM69 Wing "RST" pad --> leave unconnected (this driver never resets the radio,
-#                                                and RST has an internal pulldown)
+# extra wires since the Wing plugs straight onto the Feather): the Wing has its own
+# labeled jumper pads (A-F, RX/TX/SCL/SDA) next to IRQ/CS/RST for exactly this -
+# solder a short wire directly between two pads on the Wing itself. Verified against
+# Adafruit's EAGLE schematics for this exact Wing + the HUZZAH32/ESP32-Pico Feather
+# (see the README) that pad "A" = GPIO27 and pad "B" = GPIO33 on THIS board - that
+# mapping is specific to this board/Wing pair, not a general rule.
+#   Wing "IRQ" pad <--> Wing "A" pad   (RFM69 DIO2 / direct-modulation data -> GPIO27)
+#   Wing "CS"  pad <--> Wing "B" pad   (SPI chip select -> GPIO33)
+#   Wing "RST" pad --> leave unbridged (this driver never resets the radio, and RST
+#                                        has an internal pulldown)
 # If you want different pins, fork this repo and edit SOMFY_RFM69_CS_PIN /
 # SOMFY_RFM69_DIO2_PIN in components/somfy_rts/somfy_rts_lib.h.
 #

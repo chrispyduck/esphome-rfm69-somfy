@@ -28,11 +28,13 @@
 #include <EEPROM.h>
 
 // RFM69 FeatherWing wiring on the ESP32-Pico (HUZZAH32) Feather. SCK/MOSI/MISO are
-// fixed by the stacked-header SPI bus (GPIO5/18/19) and need no jumpers. CS and the
-// Wing's "IRQ" pad (repurposed here as the RFM69's DIO2 direct-modulation data line)
-// are the only two wires to solder - see the README/chat instructions for exactly
-// which Wing pad goes to which Feather pad. RST is left unconnected: this driver
-// never issues a hardware reset, and the RFM69's RST line has an internal pulldown.
+// fixed by the stacked-header SPI bus (GPIO5/18/19) and need no jumpers. The Wing
+// has its own labeled jumper pads (A-F, RX/TX/SCL/SDA) next to IRQ/CS/RST for the
+// other three - solder a wire directly between two pads on the Wing itself. Per
+// Adafruit's EAGLE schematics for this Wing + the HUZZAH32 (see the README), pad
+// "A" = GPIO27 and pad "B" = GPIO33 on this specific board: bridge Wing "IRQ" to
+// Wing "A", and Wing "CS" to Wing "B". RST is left unbridged: this driver never
+// issues a hardware reset, and the RFM69's RST line has an internal pulldown.
 #define SOMFY_RFM69_CS_PIN    33
 #define SOMFY_RFM69_DIO2_PIN  27
 

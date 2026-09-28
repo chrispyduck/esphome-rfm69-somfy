@@ -45,17 +45,28 @@ treat it as a solid starting point, not a guarantee.
 ### Wiring
 
 SCK/MOSI/MISO are fixed by the stacked-header SPI bus and need no extra wires.
-Two jumper wires are required (the FeatherWing ships needing them soldered
-regardless of pin choice — see [Adafruit's wiring guide](https://learn.adafruit.com/radio-featherwing/wiring)):
+The Radio FeatherWing itself has a labeled row of jumper pads (A–F, plus RX/TX/
+SCL/SDA) next to its IRQ/CS/RST pads specifically for this — you solder a short
+wire directly between two pads *on the Wing*, not out to bare pins on the Feather
+underneath. Confirmed against Adafruit's own EAGLE schematics for both boards
+([Radio FeatherWing](https://github.com/adafruit/Adafruit-Radio-FeatherWing-PCB) /
+[HUZZAH32](https://github.com/adafruit/Adafruit-HUZZAH32-ESP32-Feather-PCB)), pad
+"A" on this Wing is GPIO27 and pad "B" is GPIO33 on the HUZZAH32/ESP32-Pico Feather
+specifically (Adafruit doesn't publish this mapping themselves — for ESP32 boards
+their guide just says "wire however you like" — so this won't hold for other
+Feather boards or other Wing revisions):
 
-| RFM69 Wing pad | Feather pad | Purpose |
-|---|---|---|
-| CS | GPIO33 | SPI chip select |
-| IRQ | GPIO27 | Repurposed as RFM69 DIO2, the direct-modulation data line |
-| RST | *(leave unconnected)* | This driver never resets the radio; RST has an internal pulldown |
+| Solder together | Effect |
+|---|---|
+| Wing's "IRQ" pad ↔ Wing's "A" pad | RFM69 DIO2 (direct-modulation data line) → GPIO27 |
+| Wing's "CS" pad ↔ Wing's "B" pad | SPI chip select → GPIO33 |
+| RST | *(leave unbridged)* — this driver never resets the radio, and RST has an internal pulldown |
 
-To use different pins, fork this repo and edit `SOMFY_RFM69_CS_PIN` /
-`SOMFY_RFM69_DIO2_PIN` in `components/somfy_rts/somfy_rts_lib.h` — they're fixed at
+To use different pins, first check which letter pad carries the GPIO you want (the
+schematics above are the only reliable source — trace the `MS1`/`JPn` nets in the
+Wing's `.sch`, then match by pin position against the target board's own header
+part), then fork this repo and edit `SOMFY_RFM69_CS_PIN` / `SOMFY_RFM69_DIO2_PIN`
+in `components/somfy_rts/somfy_rts_lib.h` — they're fixed at
 compile time because the underlying driver is a single process-wide radio object
 (there's only one physical radio per device, so this is fine).
 

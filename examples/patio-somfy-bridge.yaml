@@ -1,0 +1,80 @@
+# Example ESPHome config for an ESP32-Pico Feather (Adafruit HUZZAH32) with an
+# Adafruit RFM69HCW 433MHz Radio FeatherWing (product 3230), used to send Somfy RTS
+# frames to a rollershade and a SunSetter awning (Somfy RTS motor). See this repo's
+# README for what this component does, why it exists, and how it works internally.
+#
+# WIRING (in addition to the stacked-header SPI pins SCK/MOSI/MISO, which need no
+# extra wires since the Wing plugs straight onto the Feather):
+#   RFM69 Wing "CS"  pad --> Feather "33" pad   (GPIO33)
+#   RFM69 Wing "IRQ" pad --> Feather "27" pad   (GPIO27, used here as RFM69 DIO2,
+#                                                the direct-modulation data pin)
+#   RFM69 Wing "RST" pad --> leave unconnected (this driver never resets the radio,
+#                                                and RST has an internal pulldown)
+# If you want different pins, fork this repo and edit SOMFY_RFM69_CS_PIN /
+# SOMFY_RFM69_DIO2_PIN in components/somfy_rts/somfy_rts_lib.h.
+#
+# PAIRING A SHADE/AWNING (per remote_number below):
+#   1. On the shade/awning's EXISTING remote, hold the PROG button until the motor
+#      jogs briefly (this puts the motor into pairing mode).
+#   2. Within a few seconds, press this device's matching "Pair ..." button once
+#      (Home Assistant, or the ESPHome logs will show the frame going out).
+#   3. The motor should jog again, confirming the new virtual remote is registered.
+#   Do this once per cover. Re-flashing does NOT undo pairing (the rolling code is
+#   stored in flash), but changing a cover's remote_number after pairing will make
+#   it act as a brand new, unpaired remote.
+
+esphome:
+  name: patio-somfy-bridge
+  friendly_name: Patio Somfy Bridge
+
+esp32:
+  board: featheresp32
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    encryption:
+      key: !secret api_encryption_key
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source: github://chrispyduck/esphome-rfm69-somfy
+    components: [somfy_rts]
+
+somfy_rts:
+  id: rts_hub
+
+cover:
+  - platform: somfy_rts
+    name: "Patio Rollershade"
+    somfy_rts_id: rts_hub
+    remote_number: 0
+  - platform: somfy_rts
+    name: "SunSetter Awning"
+    somfy_rts_id: rts_hub
+    remote_number: 1
+
+button:
+  - platform: template
+    name: "Pair Patio Rollershade"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(rts_hub).send_command(0, esphome::somfy_rts::SOMFY_CMD_PROG);
+  - platform: template
+    name: "Pair SunSetter Awning"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(rts_hub).send_command(1, esphome::somfy_rts::SOMFY_CMD_PROG);

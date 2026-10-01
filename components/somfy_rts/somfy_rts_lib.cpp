@@ -22,6 +22,11 @@
 //     case-insensitive filesystems (macOS, some Home Assistant setups).
 //   - TRANSMIT_HIGH/LOW use digitalWrite() on ESP32 instead of the ESP8266-only
 //     GPOS/GPOC fast register macros, which don't exist on ESP32's Arduino core.
+//   - sendSomfy() used to wrap all three outgoing frames in one noInterrupts()/
+//     interrupts() pair (~500ms total). ESP-IDF's interrupt watchdog resets the
+//     chip (TG1WDT_SYS_RESET) if interrupts stay disabled past ~300ms, so each
+//     frame now gets its own shorter pair instead - see the comment in
+//     sendSomfy() below.
 
 #include "somfy_rts_lib.h"
 #include <EEPROM.h>
@@ -186,10 +191,21 @@ void SomfyRTS::sendSomfy(unsigned char virtualRemoteNumber, unsigned char action
   _actionCommand = actionCommand;
 
   buildFrameSomfy();
+
+  // Each sendCommandSomfy() call is wrapped in its own noInterrupts()/interrupts()
+  // pair (rather than one pair around all three calls) so every individual
+  // no-interrupts window stays under ESP-IDF's default 300ms interrupt-watchdog
+  // threshold (TG1WDT_SYS_RESET) - the first frame alone (with its 89ms wake
+  // pulse) runs ~216ms, and each following frame ~143ms, but back to back with
+  // interrupts left disabled throughout they sum to ~500ms and reliably crash the
+  // ESP32. The brief re-enable between calls falls inside the protocol's own
+  // mandatory ~30ms inter-frame silence, so it costs nothing timing-wise.
   noInterrupts();
   sendCommandSomfy(2);
-  for (int i = 0; i < 2; i++) {
-    sendCommandSomfy(7);
-  }
   interrupts();
+  for (int i = 0; i < 2; i++) {
+    noInterrupts();
+    sendCommandSomfy(7);
+    interrupts();
+  }
 }

@@ -35,6 +35,14 @@ esp32:
   board: featheresp32
   framework:
     type: arduino
+    # Arduino-ESP32's EEPROM library (used by the vendored Somfy RTS rolling-code
+    # storage) is NVS-backed: every sendSomfy() call commits its whole blob as one
+    # nvs_set_blob(), which occasionally needs a flash page erase/compaction that
+    # can run past ESP-IDF's default 300ms interrupt-watchdog threshold and crash
+    # the device (TG1WDT_SYS_RESET) mid-write. Raising the timeout is Espressif's
+    # own documented mitigation for this known class of issue - not a workaround.
+    sdkconfig_options:
+      CONFIG_ESP_INT_WDT_TIMEOUT_MS: "1000"
 
 wifi:
   ssid: !secret wifi_ssid

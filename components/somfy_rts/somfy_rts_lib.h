@@ -22,6 +22,13 @@
 //     change them, edit both this file and somfy_rts_lib.cpp and re-flash.
 //   - Renamed from SomfyRTS.h to somfy_rts_lib.h to avoid a filename collision with
 //     this component's own somfy_rts.h on case-insensitive filesystems.
+//   - EEPROM.begin() shrunk from 512 to 32 bytes. Arduino-ESP32's EEPROM library is
+//     NVS-backed: commit() writes the *entire* blob as one nvs_set_blob() call even
+//     though buildFrameSomfy() only ever changes 2 bytes (one remote's rolling
+//     code), and this runs on every single UP/DOWN/STOP/PROG send. 32 bytes (16
+//     remotes) is smaller to write than 512 and still far more than any real
+//     install needs - see the interrupt-watchdog note in somfy_rts_lib.cpp for why
+//     the write size matters here.
 #ifndef SOMFY_RTS_H
 #define SOMFY_RTS_H
 #include <Arduino.h>
@@ -65,7 +72,7 @@ class SomfyRTS {
 
       initRadio();
       #if defined(ESP8266) || defined(ESP32)
-      EEPROM.begin(512);
+      EEPROM.begin(32);
       #endif
     }
 

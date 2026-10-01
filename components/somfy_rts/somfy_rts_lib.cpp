@@ -15,8 +15,6 @@
 //   - The global `radio` object below now takes explicit CS/DIO2 pins (see
 //     SOMFY_RFM69_CS_PIN/SOMFY_RFM69_DIO2_PIN in somfy_rts_lib.h) instead of relying
 //     on RFM69OOK's per-MCU default arguments, which had no ESP32 case.
-//   - EEPROM.commit() is required on ESP32 too, not just ESP8266, or the rolling
-//     code never actually reaches flash.
 //   - Renamed from SomfyRTS.h/.cpp to somfy_rts_lib.h/.cpp to avoid a filename
 //     collision with somfy_rts.h/.cpp (this component's own wrapper) on
 //     case-insensitive filesystems (macOS, some Home Assistant setups).
@@ -27,25 +25,20 @@
 //     chip (TG1WDT_SYS_RESET) if interrupts stay disabled past ~300ms, so each
 //     frame now gets its own shorter pair instead - see the comment in
 //     sendSomfy() below.
-//   - buildFrameSomfy() used to call EEPROM.commit() (a synchronous NVS flash
-//     write) on every single send. Despite shrinking the blob and raising the
-//     interrupt-watchdog timeout, this was still observed crashing real hardware
-//     (TG1WDT_SYS_RESET inside spi_flash_hal_program_page) - flash write latency
-//     on ESP32 isn't tightly bounded, so the only fully robust fix is to simply
-//     do it less often. The in-RAM EEPROM buffer (and therefore every transmitted
-//     frame's rolling code) still updates on every send - see SOMFY_EEPROM_COMMIT_
-//     EVERY below for exactly what's now deferred and why that's protocol-safe.
+//   - Rolling-code storage no longer uses EEPROM.commit() at all - see the file
+//     header in somfy_rts_lib.h and rollingCodePref()/buildFrameSomfy() below.
+//     EEPROM.commit() (a synchronous NVS flash write) was repeatedly observed
+//     crashing real hardware (TG1WDT_SYS_RESET) from this hot path even after
+//     shrinking the blob and raising the interrupt-watchdog timeout; storage now
+//     goes through ESPHome's own global_preferences system instead, which never
+//     touches flash from this code path at all.
 
 #include "somfy_rts_lib.h"
-#include <EEPROM.h>
 #include <SPI.h>
+#include <string>
 #include "RFM69OOK.h"
 #include "RFM69OOKregisters.h"
-#include "esphome/core/log.h"
-
-namespace {
-static const char *const SOMFY_EEPROM_TAG = "somfy_rts.eeprom";
-}  // namespace
+#include "esphome/core/helpers.h"
 
 #if defined(ESP8266)
   #define TRANSMIT_HIGH(pin) (GPOS = 1<<pin)
@@ -92,9 +85,25 @@ void SomfyRTS::setHighPower(bool onOFF){ //have to call it after initialize for 
   radio.setHighPower(onOFF);
 }
 
+// Lazily creates (once per remote number, then cached) the ESPHome preference
+// object backing that remote's rolling code. make_preference() itself never
+// touches flash - it just sets up a key; the actual read/write happen in
+// load()/save() below, and save() is pure in-RAM (see the file header comment).
+esphome::ESPPreferenceObject &SomfyRTS::rollingCodePref(unsigned char virtualRemoteNumber) {
+  auto it = _rollingCodePrefs.find(virtualRemoteNumber);
+  if (it == _rollingCodePrefs.end()) {
+    std::string key_str =
+        "somfy_rts_rc_" + std::to_string(_EEPROM_address) + "_" + std::to_string(virtualRemoteNumber);
+    uint32_t key = esphome::fnv1_hash(key_str);
+    it = _rollingCodePrefs.emplace(virtualRemoteNumber, esphome::global_preferences->make_preference<uint16_t>(key))
+             .first;
+  }
+  return it->second;
+}
+
 void SomfyRTS::buildFrameSomfy() {
-  uint16_t Code;
-  EEPROM.get(_EEPROM_address + 2 * _virtualRemoteNumber, Code);
+  uint16_t Code = 0;
+  this->rollingCodePref(_virtualRemoteNumber).load(&Code);
   frame[0] = 0xA7; // Encryption key. Doesn't matter much
   frame[1] = _actionCommand << 4;  // Which button did  you press? The 4 LSB will be the checksum
   frame[2] = Code >> 8;    // Rolling code (big endian)
@@ -103,14 +112,6 @@ void SomfyRTS::buildFrameSomfy() {
   frame[5] = _RTS_address + _virtualRemoteNumber >>  8; // Remote address
   frame[6] = _RTS_address + _virtualRemoteNumber;     // Remote address
 
-  //Serial.print("Frame         : ");
-  for (byte i = 0; i < 7; i++) {
-    if (frame[i] >> 4 == 0) { //  Displays leading zero in case the most significant
-      //Serial.print("0");     // nibble is a 0.
-    }
-    //Serial.print(frame[i],HEX); Serial.print(" ");
-  }
-
   // Checksum calculation: a XOR of all the nibbles
   byte checksum = 0;
   for (byte i = 0; i < 7; i++) {
@@ -118,62 +119,20 @@ void SomfyRTS::buildFrameSomfy() {
   }
   checksum &= 0b1111; // We keep the last 4 bits only
 
-
-  //Checksum integration
-  frame[1] |= checksum; //  If a XOR of all the nibbles is equal to 0, the blinds will
-  // consider the checksum ok.
-
-  //Serial.println(""); Serial.print("With checksum : ");
-  for (byte i = 0; i < 7; i++) {
-    if (frame[i] >> 4 == 0) {
-      //Serial.print("0");
-    }
-    //Serial.print(frame[i],HEX); Serial.print(" ");
-  }
-
+  // Checksum integration. If a XOR of all the nibbles is equal to 0, the blinds
+  // will consider the checksum ok.
+  frame[1] |= checksum;
 
   // Obfuscation: a XOR of all the bytes
   for (byte i = 1; i < 7; i++) {
     frame[i] ^= frame[i - 1];
   }
 
-  //Serial.println(""); Serial.print("Obfuscated    : ");
-  for (byte i = 0; i < 7; i++) {
-    if (frame[i] >> 4 == 0) {
-      //Serial.print("0");
-    }
-    //Serial.print(frame[i],HEX); Serial.print(" ");
-  }
-  //Serial.println("");
-  //Serial.print("Rolling Code  : "); Serial.println(code);
-  EEPROM.put(_EEPROM_address + 2 * _virtualRemoteNumber, ++Code); //  We store the value of the rolling code in the
-  // EEPROM. It should take up to 2 adresses but the
-  // Arduino function takes care of it.
-  #if defined(ESP8266) || defined(ESP32)
-  // Flush to flash only every SOMFY_EEPROM_COMMIT_EVERY sends (always on PROG,
-  // since pairing is rare and worth persisting immediately). The in-RAM EEPROM
-  // buffer above is already updated on every call via EEPROM.put(), so every
-  // transmitted frame's rolling code is always correct regardless of whether this
-  // particular send actually commits to flash - a crash/reboot between commits
-  // only means the next boot resumes counting from a slightly lower value than
-  // what was last transmitted, which Somfy RTS already tolerates: motors accept
-  // any code ahead of the last one they saw, and just silently ignore the next
-  // couple of now-stale-looking codes until the counter catches back up, rather
-  // than reject the remote outright.
-  constexpr uint8_t SOMFY_EEPROM_COMMIT_EVERY = 4;
-  static uint8_t sSendsSinceCommit = 0;
-  bool shouldCommit = (_actionCommand == PROG) || (++sSendsSinceCommit >= SOMFY_EEPROM_COMMIT_EVERY);
-  if (shouldCommit) {
-    sSendsSinceCommit = 0;
-    uint32_t startMs = millis();
-    EEPROM.commit();
-    unsigned int elapsedMs = static_cast<unsigned int>(millis() - startMs);
-    ESP_LOGD(SOMFY_EEPROM_TAG, "EEPROM.commit() took %ums", elapsedMs);
-    if (elapsedMs > 150) {
-      ESP_LOGW(SOMFY_EEPROM_TAG, "EEPROM.commit() took %ums - getting close to the interrupt-watchdog timeout", elapsedMs);
-    }
-  }
-  #endif
+  // Store the incremented rolling code for next time. This updates only the
+  // in-RAM shadow copy ESPHome's preferences system keeps (see the file header
+  // comment) - the real flash write happens later, on ESPHome's own schedule.
+  ++Code;
+  this->rollingCodePref(_virtualRemoteNumber).save(&Code);
 }
 
 void SomfyRTS::sendCommandSomfy(byte sync) {

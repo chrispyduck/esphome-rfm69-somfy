@@ -12,9 +12,6 @@
 //
 // Vendored from https://github.com/etimou/SomfyRTS for use as an ESPHome
 // external_component. Patched for ESP32:
-//   - EEPROM.begin() is required on ESP32 too (its EEPROM library is flash/NVS
-//     backed, same as ESP8266's), not just ESP8266. Without this the rolling-code
-//     reads/writes silently do nothing useful.
 //   - Added SOMFY_RFM69_CS_PIN / SOMFY_RFM69_DIO2_PIN: the pins the RFM69 FeatherWing
 //     must be wired to. These are fixed at compile time because the underlying
 //     RFM69OOK driver is instantiated as a single process-wide global object in
@@ -22,17 +19,23 @@
 //     change them, edit both this file and somfy_rts_lib.cpp and re-flash.
 //   - Renamed from SomfyRTS.h to somfy_rts_lib.h to avoid a filename collision with
 //     this component's own somfy_rts.h on case-insensitive filesystems.
-//   - EEPROM.begin() shrunk from 512 to 32 bytes. Arduino-ESP32's EEPROM library is
-//     NVS-backed: commit() writes the *entire* blob as one nvs_set_blob() call even
-//     though buildFrameSomfy() only ever changes 2 bytes (one remote's rolling
-//     code), and this runs on every single UP/DOWN/STOP/PROG send. 32 bytes (16
-//     remotes) is smaller to write than 512 and still far more than any real
-//     install needs - see the interrupt-watchdog note in somfy_rts_lib.cpp for why
-//     the write size matters here.
+//   - Rolling-code storage no longer uses Arduino's EEPROM library at all. Several
+//     rounds of shrinking the blob and raising ESP-IDF's interrupt-watchdog timeout
+//     still wasn't enough - EEPROM.commit() (a synchronous NVS flash write, which
+//     internally does reads too) was repeatedly observed crashing real hardware
+//     (TG1WDT_SYS_RESET) from this hot path. Storage now goes through ESPHome's own
+//     global_preferences system instead: save()/load() are pure in-RAM operations
+//     with no flash I/O at all, and the actual flash write is deferred to ESPHome's
+//     own IntervalSyncer component (default: every 60s, see the `preferences:` YAML
+//     config) - the entire ESPHome ecosystem already relies on that exact mechanism
+//     for small, infrequently-changing persisted state, so it's far more
+//     battle-tested than a one-off EEPROM-commit scheme. See rollingCodePref() and
+//     buildFrameSomfy() in somfy_rts_lib.cpp.
 #ifndef SOMFY_RTS_H
 #define SOMFY_RTS_H
 #include <Arduino.h>
-#include <EEPROM.h>
+#include <map>
+#include "esphome/core/preferences.h"
 
 // RFM69 FeatherWing wiring on the ESP32-Pico (HUZZAH32) Feather. SCK/MOSI/MISO are
 // fixed by the stacked-header SPI bus (GPIO5/18/19) and need no jumpers. The Wing
@@ -58,6 +61,10 @@ class SomfyRTS {
   public:
     void initRadio();
     void sendSomfy(unsigned char virtualRemoteNumber, unsigned char actionCommand);
+    // EEPROM_address no longer addresses actual EEPROM bytes (see the file header
+    // comment above) - it's now folded into each remote's preference-key hash, so
+    // distinct SomfyRTS instances can still be given non-colliding storage by
+    // configuring different values here, same as before.
     void configRTS(unsigned int EEPROM_address, unsigned long RTS_address);
     void setHighPower(bool onOFF=true); //have to call it after initialize for RFM69HW
 
@@ -71,15 +78,12 @@ class SomfyRTS {
       _transmitterType = transmitterType;
 
       initRadio();
-      #if defined(ESP8266) || defined(ESP32)
-      EEPROM.begin(32);
-      #endif
     }
 
   protected:
     void sendCommandSomfy(byte sync);
     void buildFrameSomfy();
-
+    esphome::ESPPreferenceObject &rollingCodePref(unsigned char virtualRemoteNumber);
 
     byte _pinTx;
     unsigned int _EEPROM_address;
@@ -88,6 +92,7 @@ class SomfyRTS {
     unsigned char _virtualRemoteNumber;
     byte frame[7]; // frame for Somfy protocol
     unsigned char _transmitterType;
+    std::map<unsigned char, esphome::ESPPreferenceObject> _rollingCodePrefs;
 
 };
 

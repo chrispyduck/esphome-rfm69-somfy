@@ -10,11 +10,21 @@
 // **********************************************************************************
 //
 // Vendored from https://github.com/etimou/SomfyRTS for use as an ESPHome
-// external_component. Patched for ESP32: select()/unselect() used to save and
-// restore the AVR-only SPCR/SPSR hardware registers whenever the target was
-// anything other than ESP8266 - on ESP32 (which is neither AVR nor ESP8266) this
-// referenced registers that don't exist and failed to compile. Now guarded against
-// both ESP8266 and ESP32.
+// external_component. Patched for ESP32:
+//   - select()/unselect() used to save and restore the AVR-only SPCR/SPSR
+//     hardware registers whenever the target was anything other than ESP8266 -
+//     on ESP32 (which is neither AVR nor ESP8266) this referenced registers
+//     that don't exist and failed to compile. Now guarded against both ESP8266
+//     and ESP32.
+//   - select()/unselect() also used to disable interrupts around every single
+//     SPI register access unconditionally. That's an AVR-era protection against
+//     an ISR corrupting a bit-banged SPI transfer mid-byte; ESP32's hardware SPI
+//     peripheral transfers each byte atomically regardless, so it does nothing
+//     useful there, and was observed being a plausible contributor to
+//     TG1WDT_SYS_RESET crashes on real hardware (repeatedly toggling the
+//     interrupt-disable lock across ~9+ register writes during initialize() can
+//     starve a concurrently-running flash operation of the uninterrupted window
+//     it needs). Now skipped on ESP32 too - see the comment in select() below.
 #include "RFM69OOK.h"
 #include "RFM69OOKregisters.h"
 #include <SPI.h>
@@ -237,9 +247,20 @@ void RFM69OOK::writeReg(byte addr, byte value)
 
 // Select the transceiver
 void RFM69OOK::select() {
+  // noInterrupts() here (and the matching interrupts() in unselect()) existed to
+  // stop an ISR from corrupting a bit-banged/interrupt-vulnerable SPI transfer
+  // mid-byte on AVR. ESP32's hardware SPI peripheral transfers each byte
+  // atomically regardless of interrupt state, so that protection does nothing
+  // useful there - and it runs once per register access (~9+ times back to back
+  // during initialize()), repeatedly grabbing and releasing the interrupt-disable
+  // lock in a tight loop. That's a plausible way to starve some unrelated,
+  // concurrently-running flash operation (WiFi/NVS init also happens around boot)
+  // of a long-enough uninterrupted window to finish, which would explain crashes
+  // landing in a different flash HAL function each time depending on whatever
+  // else happened to be mid-operation at that moment.
+  #if !defined(ESP8266) && !defined(ESP32)
   noInterrupts();
   // save current SPI settings
-  #if !defined(ESP8266) && !defined(ESP32)
   _SPCR = SPCR;
   _SPSR = SPSR;
   #endif
@@ -257,8 +278,8 @@ void RFM69OOK::unselect() {
   #if !defined(ESP8266) && !defined(ESP32)
   SPCR = _SPCR;
   SPSR = _SPSR;
-  #endif
   interrupts();
+  #endif
 }
 
 void RFM69OOK::setHighPower(bool onOff) {

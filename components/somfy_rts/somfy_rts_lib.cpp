@@ -27,12 +27,25 @@
 //     chip (TG1WDT_SYS_RESET) if interrupts stay disabled past ~300ms, so each
 //     frame now gets its own shorter pair instead - see the comment in
 //     sendSomfy() below.
+//   - buildFrameSomfy() used to call EEPROM.commit() (a synchronous NVS flash
+//     write) on every single send. Despite shrinking the blob and raising the
+//     interrupt-watchdog timeout, this was still observed crashing real hardware
+//     (TG1WDT_SYS_RESET inside spi_flash_hal_program_page) - flash write latency
+//     on ESP32 isn't tightly bounded, so the only fully robust fix is to simply
+//     do it less often. The in-RAM EEPROM buffer (and therefore every transmitted
+//     frame's rolling code) still updates on every send - see SOMFY_EEPROM_COMMIT_
+//     EVERY below for exactly what's now deferred and why that's protocol-safe.
 
 #include "somfy_rts_lib.h"
 #include <EEPROM.h>
 #include <SPI.h>
 #include "RFM69OOK.h"
 #include "RFM69OOKregisters.h"
+#include "esphome/core/log.h"
+
+namespace {
+static const char *const SOMFY_EEPROM_TAG = "somfy_rts.eeprom";
+}  // namespace
 
 #if defined(ESP8266)
   #define TRANSMIT_HIGH(pin) (GPOS = 1<<pin)
@@ -137,7 +150,29 @@ void SomfyRTS::buildFrameSomfy() {
   // EEPROM. It should take up to 2 adresses but the
   // Arduino function takes care of it.
   #if defined(ESP8266) || defined(ESP32)
-  EEPROM.commit();
+  // Flush to flash only every SOMFY_EEPROM_COMMIT_EVERY sends (always on PROG,
+  // since pairing is rare and worth persisting immediately). The in-RAM EEPROM
+  // buffer above is already updated on every call via EEPROM.put(), so every
+  // transmitted frame's rolling code is always correct regardless of whether this
+  // particular send actually commits to flash - a crash/reboot between commits
+  // only means the next boot resumes counting from a slightly lower value than
+  // what was last transmitted, which Somfy RTS already tolerates: motors accept
+  // any code ahead of the last one they saw, and just silently ignore the next
+  // couple of now-stale-looking codes until the counter catches back up, rather
+  // than reject the remote outright.
+  constexpr uint8_t SOMFY_EEPROM_COMMIT_EVERY = 4;
+  static uint8_t sSendsSinceCommit = 0;
+  bool shouldCommit = (_actionCommand == PROG) || (++sSendsSinceCommit >= SOMFY_EEPROM_COMMIT_EVERY);
+  if (shouldCommit) {
+    sSendsSinceCommit = 0;
+    uint32_t startMs = millis();
+    EEPROM.commit();
+    unsigned int elapsedMs = static_cast<unsigned int>(millis() - startMs);
+    ESP_LOGD(SOMFY_EEPROM_TAG, "EEPROM.commit() took %ums", elapsedMs);
+    if (elapsedMs > 150) {
+      ESP_LOGW(SOMFY_EEPROM_TAG, "EEPROM.commit() took %ums - getting close to the interrupt-watchdog timeout", elapsedMs);
+    }
+  }
   #endif
 }
 

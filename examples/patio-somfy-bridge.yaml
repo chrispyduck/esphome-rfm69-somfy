@@ -1,4 +1,4 @@
-# Example ESPHome config for an ESP32-Pico Feather (Adafruit HUZZAH32) with an
+# Example ESPHome config for an Adafruit ESP32 Feather V2 (ESP32-PICO-V3-02) with an
 # Adafruit RFM69HCW 433MHz Radio FeatherWing (product 3230), used to send Somfy RTS
 # frames to a rollershade and a SunSetter awning (Somfy RTS motor). See this repo's
 # README for what this component does, why it exists, and how it works internally.
@@ -7,9 +7,9 @@
 # extra wires since the Wing plugs straight onto the Feather): the Wing has its own
 # labeled jumper pads (A-F, RX/TX/SCL/SDA) next to IRQ/CS/RST for exactly this -
 # solder a short wire directly between two pads on the Wing itself. Verified against
-# Adafruit's EAGLE schematics for this exact Wing + the HUZZAH32/ESP32-Pico Feather
-# (see the README) that pad "A" = GPIO27 and pad "B" = GPIO33 on THIS board - that
-# mapping is specific to this board/Wing pair, not a general rule.
+# Adafruit's EAGLE schematics (see the README) that pad "A" = GPIO27 and pad "B" =
+# GPIO33 on this Feather/Wing pair - B (CS) is confirmed on real hardware. That mapping
+# is specific to these boards, not a general rule.
 #   Wing "IRQ" pad <--> Wing "A" pad   (RFM69 DIO2 / direct-modulation data -> GPIO27)
 #   Wing "CS"  pad <--> Wing "B" pad   (SPI chip select -> GPIO33)
 #   Wing "RST" pad --> leave unbridged (this driver never resets the radio, and RST
@@ -32,17 +32,9 @@ esphome:
   friendly_name: Patio Somfy Bridge
 
 esp32:
-  board: featheresp32
+  board: adafruit_feather_esp32_v2
   framework:
     type: arduino
-    # Arduino-ESP32's EEPROM library (used by the vendored Somfy RTS rolling-code
-    # storage) is NVS-backed: every sendSomfy() call commits its whole blob as one
-    # nvs_set_blob(), which occasionally needs a flash page erase/compaction that
-    # can run past ESP-IDF's default 300ms interrupt-watchdog threshold and crash
-    # the device (TG1WDT_SYS_RESET) mid-write. Raising the timeout is Espressif's
-    # own documented mitigation for this known class of issue - not a workaround.
-    sdkconfig_options:
-      CONFIG_ESP_INT_WDT_TIMEOUT_MS: "1000"
 
 wifi:
   ssid: !secret wifi_ssid

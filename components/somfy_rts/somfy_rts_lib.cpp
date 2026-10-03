@@ -21,17 +21,14 @@
 //   - TRANSMIT_HIGH/LOW use digitalWrite() on ESP32 instead of the ESP8266-only
 //     GPOS/GPOC fast register macros, which don't exist on ESP32's Arduino core.
 //   - sendSomfy() used to wrap all three outgoing frames in one noInterrupts()/
-//     interrupts() pair (~500ms total). ESP-IDF's interrupt watchdog resets the
-//     chip (TG1WDT_SYS_RESET) if interrupts stay disabled past ~300ms, so each
+//     interrupts() pair (~500ms total). ESP-IDF's interrupt watchdog is documented
+//     to reset the chip if interrupts stay disabled past ~300ms by default, so each
 //     frame now gets its own shorter pair instead - see the comment in
-//     sendSomfy() below.
-//   - Rolling-code storage no longer uses EEPROM.commit() at all - see the file
+//     sendSomfy() below. (Precautionary: this was never observed to fire here.)
+//   - Rolling-code storage no longer uses Arduino's EEPROM library - see the file
 //     header in somfy_rts_lib.h and rollingCodePref()/buildFrameSomfy() below.
-//     EEPROM.commit() (a synchronous NVS flash write) was repeatedly observed
-//     crashing real hardware (TG1WDT_SYS_RESET) from this hot path even after
-//     shrinking the blob and raising the interrupt-watchdog timeout; storage now
-//     goes through ESPHome's own global_preferences system instead, which never
-//     touches flash from this code path at all.
+//   - initRadio() records whether the RFM69 answered; sendSomfy() does nothing if
+//     it didn't, so a dead radio can't burn rolling codes.
 
 #include "somfy_rts_lib.h"
 #include <SPI.h>
@@ -67,13 +64,22 @@ void SomfyRTS::initRadio() {
 
   if (_transmitterType == TSR_RFM69)
   {
-
-    radio.initialize();
+    _radioOk = radio.initialize();
+    if (!_radioOk)
+      return;
     radio.transmitBegin();
     //radio.setFrequencyMHz(868.88);
     radio.setFrequencyMHz(433.42);
     radio.setPowerLevel(20);
   }
+  else
+  {
+    _radioOk = true;
+  }
+}
+
+unsigned char SomfyRTS::radioVersion() const {
+  return radio.version();
 }
 
 void SomfyRTS::configRTS(unsigned int EEPROM_address, unsigned long RTS_address) {
@@ -82,6 +88,8 @@ void SomfyRTS::configRTS(unsigned int EEPROM_address, unsigned long RTS_address)
 }
 
 void SomfyRTS::setHighPower(bool onOFF){ //have to call it after initialize for RFM69HW
+  if (_transmitterType == TSR_RFM69 && !_radioOk)
+    return;
   radio.setHighPower(onOFF);
 }
 
@@ -181,6 +189,8 @@ void SomfyRTS::sendCommandSomfy(byte sync) {
 }
 
 void SomfyRTS::sendSomfy(unsigned char virtualRemoteNumber, unsigned char actionCommand) {
+  if (!_radioOk)
+    return;  // radio never initialized; don't burn a rolling code on a frame that can't go out
   _virtualRemoteNumber = virtualRemoteNumber;
   _actionCommand = actionCommand;
 
@@ -191,8 +201,8 @@ void SomfyRTS::sendSomfy(unsigned char virtualRemoteNumber, unsigned char action
   // no-interrupts window stays under ESP-IDF's default 300ms interrupt-watchdog
   // threshold (TG1WDT_SYS_RESET) - the first frame alone (with its 89ms wake
   // pulse) runs ~216ms, and each following frame ~143ms, but back to back with
-  // interrupts left disabled throughout they sum to ~500ms and reliably crash the
-  // ESP32. The brief re-enable between calls falls inside the protocol's own
+  // interrupts left disabled throughout they sum to ~500ms, which exceeds that
+  // threshold. The brief re-enable between calls falls inside the protocol's own
   // mandatory ~30ms inter-frame silence, so it costs nothing timing-wise.
   noInterrupts();
   sendCommandSomfy(2);

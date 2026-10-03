@@ -18,9 +18,8 @@ async def to_code(config):
     # ESPHome's ESP32/Arduino build disables most Arduino-bundled libraries by
     # default to save flash; cg.add_library() is the supported way to re-enable
     # one (see esphome/components/fastled_base and .../ota for other examples).
-    # The vendored Somfy RTS driver needs Arduino's SPI and EEPROM directly.
+    # The vendored RFM69 driver needs Arduino's SPI library directly.
     cg.add_library("SPI", None)
-    cg.add_library("EEPROM", None)
 
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)

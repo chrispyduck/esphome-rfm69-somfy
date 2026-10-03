@@ -45,6 +45,20 @@
   #define RF69OOK_IRQ_NUM          27
 #endif
 
+// SPI bus pins for ESP32. Arduino-ESP32's SPI.begin() with no arguments uses the
+// generic-variant defaults (SCK=18, MISO=19, MOSI=23), which don't match any
+// Feather - and on the Adafruit ESP32 Feather V2 calling it that way hangs
+// forever, so these are always passed explicitly. Values are the Feather V2's
+// stacked-header SPI pins (SCK=5, MISO=21, MOSI=19); override by defining them
+// before this header is included.
+#if defined(ESP32)
+  #ifndef RF69OOK_SPI_SCK
+    #define RF69OOK_SPI_SCK   5
+    #define RF69OOK_SPI_MISO  21
+    #define RF69OOK_SPI_MOSI  19
+  #endif
+#endif
+
 #define RF69OOK_MODE_SLEEP       0 // XTAL OFF
 #define RF69OOK_MODE_STANDBY     1 // XTAL ON
 #define RF69OOK_MODE_SYNTH       2 // PLL ON
@@ -67,9 +81,12 @@ class RFM69OOK {
       _mode = RF69OOK_MODE_STANDBY;
       _powerLevel = 31;
       _isRFM69HW = isRFM69HW;
+      _version = 0;
     }
 
+    // Returns false (without hanging) if the radio doesn't answer on SPI.
     bool initialize();
+    byte version() const { return _version; }  // RegVersion read during initialize(); 0x24 on a healthy RFM69
     uint32_t getFrequency();
     void setFrequency(uint32_t freqHz);
     void setFrequencyMHz(float f);
@@ -113,6 +130,7 @@ class RFM69OOK {
     byte _interruptNum;
     byte _powerLevel;
     bool _isRFM69HW;
+    byte _version;
     byte _SPCR;
     byte _SPSR;
 

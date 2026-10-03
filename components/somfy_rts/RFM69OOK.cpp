@@ -20,11 +20,10 @@
 //     SPI register access unconditionally. That's an AVR-era protection against
 //     an ISR corrupting a bit-banged SPI transfer mid-byte; ESP32's hardware SPI
 //     peripheral transfers each byte atomically regardless, so it does nothing
-//     useful there, and was observed being a plausible contributor to
-//     TG1WDT_SYS_RESET crashes on real hardware (repeatedly toggling the
-//     interrupt-disable lock across ~9+ register writes during initialize() can
-//     starve a concurrently-running flash operation of the uninterrupted window
-//     it needs). Now skipped on ESP32 too - see the comment in select() below.
+//     useful there. Now skipped on ESP32 too - see the comment in select() below.
+//   - initialize() now passes explicit SPI pins (the no-argument SPI.begin() hangs
+//     on the Adafruit ESP32 Feather V2), checks RegVersion, and bounds its
+//     MODEREADY wait instead of spinning forever - see the comments there.
 #include "RFM69OOK.h"
 #include "RFM69OOKregisters.h"
 #include <SPI.h>
@@ -50,14 +49,33 @@ bool RFM69OOK::initialize()
   };
 
   pinMode(_slaveSelectPin, OUTPUT);
+  #if defined(ESP32)
+  SPI.begin(RF69OOK_SPI_SCK, RF69OOK_SPI_MISO, RF69OOK_SPI_MOSI, -1);
+  #else
   SPI.begin();
+  #endif
+
+  // RegVersion (0x10) reads 0x24 on every RFM69/SX1231. Anything else (usually
+  // 0x00 or 0xFF) means the radio isn't answering - miswired CS/SPI, no power,
+  // wrong pins. Bail out instead of writing registers into nothing and, worse,
+  // spinning forever below: the original loop here was unbounded, and on ESP32
+  // a hang inside setup() trips the watchdog and boot-loops the device.
+  _version = readReg(0x10);
+  if (_version != 0x24)
+    return false;
 
   for (byte i = 0; CONFIG[i][0] != 255; i++)
     writeReg(CONFIG[i][0], CONFIG[i][1]);
 
   setHighPower(_isRFM69HW); // called regardless if it's a RFM69W or RFM69HW
   setMode(RF69OOK_MODE_STANDBY);
-    while ((readReg(REG_IRQFLAGS1) & RF_IRQFLAGS1_MODEREADY) == 0x00); // Wait for ModeReady
+  {
+    uint32_t waitStart = millis();
+    while ((readReg(REG_IRQFLAGS1) & RF_IRQFLAGS1_MODEREADY) == 0x00) { // Wait for ModeReady
+      if (millis() - waitStart > 100)
+        return false;
+    }
+  }
 
   selfPointer = this;
   return true;
@@ -251,13 +269,7 @@ void RFM69OOK::select() {
   // stop an ISR from corrupting a bit-banged/interrupt-vulnerable SPI transfer
   // mid-byte on AVR. ESP32's hardware SPI peripheral transfers each byte
   // atomically regardless of interrupt state, so that protection does nothing
-  // useful there - and it runs once per register access (~9+ times back to back
-  // during initialize()), repeatedly grabbing and releasing the interrupt-disable
-  // lock in a tight loop. That's a plausible way to starve some unrelated,
-  // concurrently-running flash operation (WiFi/NVS init also happens around boot)
-  // of a long-enough uninterrupted window to finish, which would explain crashes
-  // landing in a different flash HAL function each time depending on whatever
-  // else happened to be mid-operation at that moment.
+  // useful there, so it's skipped on ESP32 (and ESP8266).
   #if !defined(ESP8266) && !defined(ESP32)
   noInterrupts();
   // save current SPI settings

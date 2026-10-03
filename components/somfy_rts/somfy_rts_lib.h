@@ -19,29 +19,23 @@
 //     change them, edit both this file and somfy_rts_lib.cpp and re-flash.
 //   - Renamed from SomfyRTS.h to somfy_rts_lib.h to avoid a filename collision with
 //     this component's own somfy_rts.h on case-insensitive filesystems.
-//   - Rolling-code storage no longer uses Arduino's EEPROM library at all. Several
-//     rounds of shrinking the blob and raising ESP-IDF's interrupt-watchdog timeout
-//     still wasn't enough - EEPROM.commit() (a synchronous NVS flash write, which
-//     internally does reads too) was repeatedly observed crashing real hardware
-//     (TG1WDT_SYS_RESET) from this hot path. Storage now goes through ESPHome's own
-//     global_preferences system instead: save()/load() are pure in-RAM operations
-//     with no flash I/O at all, and the actual flash write is deferred to ESPHome's
-//     own IntervalSyncer component (default: every 60s, see the `preferences:` YAML
-//     config) - the entire ESPHome ecosystem already relies on that exact mechanism
-//     for small, infrequently-changing persisted state, so it's far more
-//     battle-tested than a one-off EEPROM-commit scheme. See rollingCodePref() and
-//     buildFrameSomfy() in somfy_rts_lib.cpp.
+//   - Rolling-code storage goes through ESPHome's own global_preferences system
+//     instead of Arduino's EEPROM library (which would have committed a whole NVS
+//     blob on every send): save()/load() are in-RAM operations, and the flash write
+//     happens on ESPHome's own IntervalSyncer schedule (default every 60s, see the
+//     `preferences:` YAML config). See rollingCodePref() and buildFrameSomfy() in
+//     somfy_rts_lib.cpp.
 #ifndef SOMFY_RTS_H
 #define SOMFY_RTS_H
 #include <Arduino.h>
 #include <map>
 #include "esphome/core/preferences.h"
 
-// RFM69 FeatherWing wiring on the ESP32-Pico (HUZZAH32) Feather. SCK/MOSI/MISO are
+// RFM69 FeatherWing wiring on the Adafruit ESP32 Feather V2. SCK/MOSI/MISO are
 // fixed by the stacked-header SPI bus (GPIO5/18/19) and need no jumpers. The Wing
 // has its own labeled jumper pads (A-F, RX/TX/SCL/SDA) next to IRQ/CS/RST for the
 // other three - solder a wire directly between two pads on the Wing itself. Per
-// Adafruit's EAGLE schematics for this Wing + the HUZZAH32 (see the README), pad
+// Adafruit's EAGLE schematics (see the README; CS/pad B confirmed on hardware), pad
 // "A" = GPIO27 and pad "B" = GPIO33 on this specific board: bridge Wing "IRQ" to
 // Wing "A", and Wing "CS" to Wing "B". RST is left unbridged: this driver never
 // issues a hardware reset, and the RFM69's RST line has an internal pulldown.
@@ -67,6 +61,8 @@ class SomfyRTS {
     // configuring different values here, same as before.
     void configRTS(unsigned int EEPROM_address, unsigned long RTS_address);
     void setHighPower(bool onOFF=true); //have to call it after initialize for RFM69HW
+    bool radioOk() const { return _radioOk; }  // false if the RFM69 didn't answer during init
+    unsigned char radioVersion() const;
 
     SomfyRTS(byte pinTx, unsigned char transmitterType) {
 
@@ -76,6 +72,7 @@ class SomfyRTS {
       _actionCommand = STOP;
       _virtualRemoteNumber = 0;
       _transmitterType = transmitterType;
+      _radioOk = false;
 
       initRadio();
     }
@@ -92,6 +89,7 @@ class SomfyRTS {
     unsigned char _virtualRemoteNumber;
     byte frame[7]; // frame for Somfy protocol
     unsigned char _transmitterType;
+    bool _radioOk;
     std::map<unsigned char, esphome::ESPPreferenceObject> _rollingCodePrefs;
 
 };

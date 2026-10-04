@@ -1,4 +1,5 @@
 #pragma once
+#include "esphome/components/rfm69_direct/rfm69_direct.h"
 #include "esphome/core/component.h"
 #include "somfy_rts_lib.h"
 
@@ -17,12 +18,14 @@ static const uint8_t SOMFY_CMD_PROG = PROG;
 #undef STOP
 #undef PROG
 
-// Owns the single RFM69 radio (see SOMFY_RFM69_CS_PIN / SOMFY_RFM69_DIO2_PIN in
-// somfy_rts_lib.h for the wiring) and dispatches Somfy RTS frames on its behalf.
-// There is only ever one instance of this in a config: the underlying driver is a
-// single process-wide radio object, matching the one physical RFM69 module.
+// Dispatches Somfy RTS frames through the shared RFM69DirectHub radio (see
+// components/rfm69_direct/) on behalf of every somfy_rts cover. There is only ever
+// one instance of this in a config: the underlying driver is a single
+// process-wide radio object, matching the one physical RFM69 module.
 class SomfyRTSHub : public Component {
  public:
+  void set_radio_hub(rfm69_direct::RFM69DirectHub *radio_hub) { radio_hub_ = radio_hub; }
+
   void setup() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::HARDWARE; }
@@ -33,6 +36,7 @@ class SomfyRTSHub : public Component {
   void send_command(uint8_t remote_number, uint8_t command);
 
  protected:
+  rfm69_direct::RFM69DirectHub *radio_hub_{nullptr};
   SomfyRTS *radio_{nullptr};
 };
 

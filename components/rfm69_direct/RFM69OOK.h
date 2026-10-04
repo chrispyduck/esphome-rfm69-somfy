@@ -19,6 +19,15 @@
 //     in SomfyRTS.h), but the default-argument expressions in the constructor below
 //     are still part of the class declaration and must resolve to *something* at
 //     compile time.
+//   - Moved out of components/somfy_rts/ into this standalone components/rfm69_direct/
+//     component, and given setOokMode()/setFskMode() (despite the class's now-dated
+//     "OOK" name): both Somfy RTS (continuous-OOK) and Allesin RTS (continuous-FSK,
+//     see components/allesin_rts/) direct-modulate the single physical RFM69 through
+//     this one driver instance - DIO2 is just a data line either way, and which tone
+//     a given digitalWrite(HIGH/LOW) produces on air depends only on REG_DATAMODUL's
+//     modulation-type bit, which these two methods flip. Callers re-apply the mode
+//     they need immediately before transmitting rather than relying on whatever the
+//     other protocol left it in.
 #ifndef RFM69OOK_h
 #define RFM69OOK_h
 #include <Arduino.h>            //assumes Arduino IDE v1.0 or greater
@@ -116,6 +125,13 @@ class RFM69OOK {
 	void setRSSIThreshold(int8_t rssi);
 	void setFixedThreshold(uint8_t threshold);
 	void setSensitivityBoost(uint8_t value);
+
+    // Switches REG_DATAMODUL between continuous OOK and continuous FSK direct
+    // modulation, with no bit-sync, no shaping - DIO2 stays a plain data line in
+    // both cases (see the file header comment above). Safe to call right before
+    // every transmission: each is just a couple of SPI register writes.
+    void setOokMode();
+    void setFskMode(uint32_t deviationHz);
 
     void select();
     void unselect();

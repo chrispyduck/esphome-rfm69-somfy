@@ -12,14 +12,18 @@
 //
 // Vendored from https://github.com/etimou/SomfyRTS for use as an ESPHome
 // external_component. Patched for ESP32:
-//   - The global `radio` object below now takes explicit CS/DIO2 pins (see
-//     SOMFY_RFM69_CS_PIN/SOMFY_RFM69_DIO2_PIN in somfy_rts_lib.h) instead of relying
-//     on RFM69OOK's per-MCU default arguments, which had no ESP32 case.
+//   - The global `radio` object this file used to define (with explicit CS/DIO2
+//     pins - see SOMFY_RFM69_CS_PIN/SOMFY_RFM69_DIO2_PIN in somfy_rts_lib.h) now
+//     lives in components/rfm69_direct/rfm69_direct.cpp instead, shared with Allesin
+//     RTS. This file only reconfigures it (setOokMode()/setFrequencyMHz()) right
+//     before each send and bit-bangs RFM69_DIRECT_DIO2_PIN - see sendSomfy() below.
 //   - Renamed from SomfyRTS.h/.cpp to somfy_rts_lib.h/.cpp to avoid a filename
 //     collision with somfy_rts.h/.cpp (this component's own wrapper) on
 //     case-insensitive filesystems (macOS, some Home Assistant setups).
-//   - TRANSMIT_HIGH/LOW use digitalWrite() on ESP32 instead of the ESP8266-only
-//     GPOS/GPOC fast register macros, which don't exist on ESP32's Arduino core.
+//   - TRANSMIT_HIGH/LOW use the RFM69_DIRECT_TRANSMIT_HIGH/LOW() macros from
+//     components/rfm69_direct/rfm69_direct.h (digitalWrite() on ESP32, the
+//     ESP8266-only GPOS/GPOC fast register macros on ESP8266) instead of defining
+//     their own copies.
 //   - sendSomfy() used to wrap all three outgoing frames in one noInterrupts()/
 //     interrupts() pair (~500ms total). ESP-IDF's interrupt watchdog is documented
 //     to reset the chip if interrupts stay disabled past ~300ms by default, so each
@@ -27,70 +31,32 @@
 //     sendSomfy() below. (Precautionary: this was never observed to fire here.)
 //   - Rolling-code storage no longer uses Arduino's EEPROM library - see the file
 //     header in somfy_rts_lib.h and rollingCodePref()/buildFrameSomfy() below.
-//   - initRadio() records whether the RFM69 answered; sendSomfy() does nothing if
-//     it didn't, so a dead radio can't burn rolling codes.
+//   - initRadio() no longer touches the radio's SPI init at all - that one-time
+//     bring-up (and the chip-present check) is now owned by
+//     components/rfm69_direct/'s RFM69DirectHub::setup(), which runs before this
+//     class is ever constructed (see its BUS setup priority). initRadio() just
+//     reads back the RegVersion that init already captured; sendSomfy() does
+//     nothing if it wasn't 0x24, so a dead radio can't burn rolling codes.
 
 #include "somfy_rts_lib.h"
-#include <SPI.h>
 #include <string>
-#include "RFM69OOK.h"
-#include "RFM69OOKregisters.h"
 #include "esphome/core/helpers.h"
 
-#if defined(ESP8266)
-  #define TRANSMIT_HIGH(pin) (GPOS = 1<<pin)
-  #define TRANSMIT_LOW(pin) (GPOC = 1<<pin)
-#elif defined(ESP32)
-  // GPOS/GPOC (ESP8266's fast direct-register set/clear macros) don't exist on the
-  // ESP32 Arduino core. The original author's own comment above already flagged
-  // digitalWrite() as the portable fallback; its overhead (tens of ns) is
-  // negligible against Somfy RTS's own timing (640us symbols), so there's no need
-  // for direct register access here.
-  #define TRANSMIT_HIGH(pin) (digitalWrite(pin, HIGH))
-  #define TRANSMIT_LOW(pin) (digitalWrite(pin, LOW))
-#else
-  #define TRANSMIT_HIGH(pin) (PORTD |= 1<<pin)
-  #define TRANSMIT_LOW(pin) (PORTD &= !(1<<pin))
-#endif
-
-
-// isRFM69HW is left false here on purpose: SomfyRTS::setHighPower() (called by the
-// ESPHome hub right after construction, matching this library's documented usage)
-// is what actually engages the PA1/PA2 high-power stages via RFM69OOK::setHighPower().
-RFM69OOK radio(SOMFY_RFM69_CS_PIN, SOMFY_RFM69_DIO2_PIN, false, SOMFY_RFM69_DIO2_PIN);
+using esphome::rfm69_direct::radio;
 
 void SomfyRTS::initRadio() {
   pinMode(_pinTx, OUTPUT);
 
-  if (_transmitterType == TSR_RFM69)
-  {
-    _radioOk = radio.initialize();
-    if (!_radioOk)
-      return;
-    radio.transmitBegin();
-    //radio.setFrequencyMHz(868.88);
-    radio.setFrequencyMHz(433.42);
-    radio.setPowerLevel(20);
-  }
-  else
-  {
+  if (_transmitterType == TSR_RFM69) {
+    _radioOk = (radio.version() == 0x24);
+  } else {
     _radioOk = true;
   }
-}
-
-unsigned char SomfyRTS::radioVersion() const {
-  return radio.version();
 }
 
 void SomfyRTS::configRTS(unsigned int EEPROM_address, unsigned long RTS_address) {
   _EEPROM_address = EEPROM_address;
   _RTS_address = RTS_address;
-}
-
-void SomfyRTS::setHighPower(bool onOFF){ //have to call it after initialize for RFM69HW
-  if (_transmitterType == TSR_RFM69 && !_radioOk)
-    return;
-  radio.setHighPower(onOFF);
 }
 
 // Lazily creates (once per remote number, then cached) the ESPHome preference
@@ -146,45 +112,45 @@ void SomfyRTS::buildFrameSomfy() {
 void SomfyRTS::sendCommandSomfy(byte sync) {
   if (sync == 2) { // Only with the first frame.
     //Wake-up pulse & Silence
-    TRANSMIT_HIGH(_pinTx);
+    RFM69_DIRECT_TRANSMIT_HIGH();
     delayMicroseconds(9415);
-    TRANSMIT_LOW(_pinTx);
+    RFM69_DIRECT_TRANSMIT_LOW();
     //delayMicroseconds(89565U);
     delay(89);
   }
 
   // Hardware sync: two sync for the first frame, seven for the following ones.
   for (int i = 0; i < sync; i++) {
-    TRANSMIT_HIGH(_pinTx);
+    RFM69_DIRECT_TRANSMIT_HIGH();
     delayMicroseconds(4 * SYMBOL);
-    TRANSMIT_LOW(_pinTx);
+    RFM69_DIRECT_TRANSMIT_LOW();
     delayMicroseconds(4 * SYMBOL);
   }
 
   // Software sync
-  TRANSMIT_HIGH(_pinTx);
+  RFM69_DIRECT_TRANSMIT_HIGH();
   delayMicroseconds(4550);
-  TRANSMIT_LOW(_pinTx);
+  RFM69_DIRECT_TRANSMIT_LOW();
   delayMicroseconds(SYMBOL);
 
 
   //Data: bits are sent one by one, starting with the MSB.
   for (byte i = 0; i < 56; i++) {
     if (((frame[i / 8] >> (7 - (i % 8))) & 1) == 1) {
-      TRANSMIT_LOW(_pinTx);
+      RFM69_DIRECT_TRANSMIT_LOW();
       delayMicroseconds(SYMBOL);
-      TRANSMIT_HIGH(_pinTx);
+      RFM69_DIRECT_TRANSMIT_HIGH();
       delayMicroseconds(SYMBOL);
     }
     else {
-      TRANSMIT_HIGH(_pinTx);
+      RFM69_DIRECT_TRANSMIT_HIGH();
       delayMicroseconds(SYMBOL);
-      TRANSMIT_LOW(_pinTx);
+      RFM69_DIRECT_TRANSMIT_LOW();
       delayMicroseconds(SYMBOL);
     }
   }
 
-  TRANSMIT_LOW(_pinTx);
+  RFM69_DIRECT_TRANSMIT_LOW();
   delayMicroseconds(30415); // Inter-frame silence
 }
 
@@ -193,6 +159,15 @@ void SomfyRTS::sendSomfy(unsigned char virtualRemoteNumber, unsigned char action
     return;  // radio never initialized; don't burn a rolling code on a frame that can't go out
   _virtualRemoteNumber = virtualRemoteNumber;
   _actionCommand = actionCommand;
+
+  if (_transmitterType == TSR_RFM69) {
+    // The shared radio may have been left in Allesin RTS's continuous-FSK mode (or
+    // at its frequency) by a previous send - put it back into what Somfy needs.
+    // Cheap (a few SPI register writes); safe to redo on every send.
+    radio.setOokMode();
+    radio.setFrequencyMHz(433.42);
+    radio.setPowerLevel(20);
+  }
 
   buildFrameSomfy();
 

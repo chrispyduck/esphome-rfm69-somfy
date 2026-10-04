@@ -9,24 +9,18 @@ AUTO_LOAD = ["rfm69_direct"]
 
 CONF_RFM69_DIRECT_ID = "rfm69_direct_id"
 
-somfy_rts_ns = cg.esphome_ns.namespace("somfy_rts")
-SomfyRTSHub = somfy_rts_ns.class_("SomfyRTSHub", cg.Component)
+allesin_rts_ns = cg.esphome_ns.namespace("allesin_rts")
+AllesinRTSHub = allesin_rts_ns.class_("AllesinRTSHub", cg.Component)
 
 CONFIG_SCHEMA = cv.Schema(
     {
-        cv.GenerateID(): cv.declare_id(SomfyRTSHub),
+        cv.GenerateID(): cv.declare_id(AllesinRTSHub),
         cv.GenerateID(CONF_RFM69_DIRECT_ID): cv.use_id(RFM69DirectHub),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
 
 async def to_code(config):
-    # ESPHome's ESP32/Arduino build disables most Arduino-bundled libraries by
-    # default to save flash; cg.add_library() is the supported way to re-enable
-    # one (see esphome/components/fastled_base and .../ota for other examples).
-    # The vendored RFM69 driver needs Arduino's SPI library directly.
-    cg.add_library("SPI", None)
-
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 

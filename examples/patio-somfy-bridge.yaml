@@ -1,7 +1,10 @@
 # Example ESPHome config for an Adafruit ESP32 Feather V2 (ESP32-PICO-V3-02) with an
 # Adafruit RFM69HCW 433MHz Radio FeatherWing (product 3230), used to send Somfy RTS
-# frames to a rollershade and a SunSetter awning (Somfy RTS motor). See this repo's
-# README for what this component does, why it exists, and how it works internally.
+# frames to a rollershade and a SunSetter awning (Somfy RTS motor), and Allesin RTS
+# frames to an Allesin M130 roller blind. See this repo's README for what each
+# component does, why it exists, and how it works internally - the Allesin section
+# in particular covers important caveats (no decoded protocol, no addressing, no
+# verified real-hardware test by this repo).
 #
 # WIRING (in addition to the stacked-header SPI pins SCK/MOSI/MISO, which need no
 # extra wires since the Wing plugs straight onto the Feather): the Wing has its own
@@ -9,15 +12,16 @@
 # solder a short wire directly between two pads on the Wing itself. Verified against
 # Adafruit's EAGLE schematics (see the README) that pad "A" = GPIO27 and pad "B" =
 # GPIO33 on this Feather/Wing pair - B (CS) is confirmed on real hardware. That mapping
-# is specific to these boards, not a general rule.
+# is specific to these boards, not a general rule. This one physical radio is shared
+# by both protocols below - there's only one to wire up either way.
 #   Wing "IRQ" pad <--> Wing "A" pad   (RFM69 DIO2 / direct-modulation data -> GPIO27)
 #   Wing "CS"  pad <--> Wing "B" pad   (SPI chip select -> GPIO33)
 #   Wing "RST" pad --> leave unbridged (this driver never resets the radio, and RST
 #                                        has an internal pulldown)
-# If you want different pins, fork this repo and edit SOMFY_RFM69_CS_PIN /
-# SOMFY_RFM69_DIO2_PIN in components/somfy_rts/somfy_rts_lib.h.
+# If you want different pins, fork this repo and edit RFM69_DIRECT_CS_PIN /
+# RFM69_DIRECT_DIO2_PIN in components/rfm69_direct/rfm69_direct.h.
 #
-# PAIRING A SHADE/AWNING (per remote_number below):
+# PAIRING A SOMFY SHADE/AWNING (per remote_number below):
 #   1. On the shade/awning's EXISTING remote, hold the PROG button until the motor
 #      jogs briefly (this puts the motor into pairing mode).
 #   2. Within a few seconds, press this device's matching "Pair ..." button once
@@ -26,6 +30,8 @@
 #   Do this once per cover. Re-flashing does NOT undo pairing (the rolling code is
 #   stored in flash), but changing a cover's remote_number after pairing will make
 #   it act as a brand new, unpaired remote.
+#
+# The Allesin blind needs no pairing step - see the README's Allesin RTS section.
 
 esphome:
   name: patio-somfy-bridge
@@ -54,10 +60,15 @@ logger:
 
 external_components:
   - source: github://chrispyduck/esphome-rfm69-somfy
-    components: [somfy_rts]
+    # rfm69_direct is the shared radio driver both protocols sit on top of - list it
+    # even if you only want one of the two.
+    components: [rfm69_direct, somfy_rts, allesin_rts]
 
 somfy_rts:
   id: rts_hub
+
+allesin_rts:
+  id: allesin_hub
 
 cover:
   - platform: somfy_rts
@@ -68,6 +79,9 @@ cover:
     name: "SunSetter Awning"
     somfy_rts_id: rts_hub
     remote_number: 1
+  - platform: allesin_rts
+    name: "Allesin Blind"
+    allesin_rts_id: allesin_hub
 
 button:
   - platform: template

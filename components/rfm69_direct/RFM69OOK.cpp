@@ -24,6 +24,10 @@
 //   - initialize() now passes explicit SPI pins (the no-argument SPI.begin() hangs
 //     on the Adafruit ESP32 Feather V2), checks RegVersion, and bounds its
 //     MODEREADY wait instead of spinning forever - see the comments there.
+//   - Added setOokMode()/setFskMode(): moved out of components/somfy_rts/ into this
+//     standalone components/rfm69_direct/ component so the one physical radio can be
+//     reconfigured between Somfy RTS's continuous-OOK and Allesin RTS's
+//     continuous-FSK direct modulation (see the header comment in RFM69OOK.h).
 #include "RFM69OOK.h"
 #include "RFM69OOKregisters.h"
 #include <SPI.h>
@@ -182,6 +186,29 @@ void RFM69OOK::setRSSIThreshold(int8_t rssi)
 void RFM69OOK::setFixedThreshold(uint8_t threshold)
 {
   writeReg(REG_OOKFIX, threshold);
+}
+
+// Continuous, no-bit-sync OOK direct modulation, no shaping - matches the table in
+// initialize() below. DIO2 high = carrier on, low = carrier off.
+void RFM69OOK::setOokMode()
+{
+  writeReg(REG_DATAMODUL, RF_DATAMODUL_DATAMODE_CONTINUOUSNOBSYNC | RF_DATAMODUL_MODULATIONTYPE_OOK |
+                              RF_DATAMODUL_MODULATIONSHAPING_00);
+}
+
+// Continuous, no-bit-sync FSK direct modulation, no shaping. DIO2 high/low shifts
+// the carrier to f_c +/- deviationHz instead of switching it on/off - see
+// RFM69OOK.h's file header comment for why the same digitalWrite-driven pin works
+// for both modulation types. deviationHz is rounded to the nearest FSTEP (~61 Hz)
+// and clamped to REG_FDEVMSB's 6 usable bits (per the datasheet, Fdev <= 16383 steps
+// i.e. ~999 kHz - Allesin's ~19 kHz deviation is nowhere near that ceiling).
+void RFM69OOK::setFskMode(uint32_t deviationHz)
+{
+  writeReg(REG_DATAMODUL, RF_DATAMODUL_DATAMODE_CONTINUOUSNOBSYNC | RF_DATAMODUL_MODULATIONTYPE_FSK |
+                              RF_DATAMODUL_MODULATIONSHAPING_00);
+  uint32_t fdev = (uint32_t) (deviationHz / RF69OOK_FSTEP + 0.5);
+  writeReg(REG_FDEVMSB, (fdev >> 8) & 0x3F);
+  writeReg(REG_FDEVLSB, fdev & 0xFF);
 }
 
 // set sensitivity boost in REG_TESTLNA

@@ -25,22 +25,22 @@
 //     happens on ESPHome's own IntervalSyncer schedule (default every 60s, see the
 //     `preferences:` YAML config). See rollingCodePref() and buildFrameSomfy() in
 //     somfy_rts_lib.cpp.
+//   - The physical RFM69 driver (RFM69OOK), its pin defines, and the one-time chip
+//     init moved out to components/rfm69_direct/ so Allesin RTS (see
+//     components/allesin_rts/) can share the same physical radio - there is only one
+//     RFM69 chip per device. This file now gets SOMFY_RFM69_CS_PIN/_DIO2_PIN and the
+//     `radio` object by including rfm69_direct.h instead of defining them itself.
 #ifndef SOMFY_RTS_H
 #define SOMFY_RTS_H
 #include <Arduino.h>
 #include <map>
+#include "esphome/components/rfm69_direct/rfm69_direct.h"
 #include "esphome/core/preferences.h"
 
-// RFM69 FeatherWing wiring on the Adafruit ESP32 Feather V2. SCK/MOSI/MISO are
-// fixed by the stacked-header SPI bus (GPIO5/18/19) and need no jumpers. The Wing
-// has its own labeled jumper pads (A-F, RX/TX/SCL/SDA) next to IRQ/CS/RST for the
-// other three - solder a wire directly between two pads on the Wing itself. Per
-// Adafruit's EAGLE schematics (see the README; CS/pad B confirmed on hardware), pad
-// "A" = GPIO27 and pad "B" = GPIO33 on this specific board: bridge Wing "IRQ" to
-// Wing "A", and Wing "CS" to Wing "B". RST is left unbridged: this driver never
-// issues a hardware reset, and the RFM69's RST line has an internal pulldown.
-#define SOMFY_RFM69_CS_PIN    33
-#define SOMFY_RFM69_DIO2_PIN  27
+// Aliases kept for this file's own readability; the actual pins live in
+// components/rfm69_direct/rfm69_direct.h since they're no longer Somfy-specific.
+#define SOMFY_RFM69_CS_PIN esphome::rfm69_direct::RFM69_DIRECT_CS_PIN
+#define SOMFY_RFM69_DIO2_PIN esphome::rfm69_direct::RFM69_DIRECT_DIO2_PIN
 
 #define SYMBOL 640
 #define UP 0x2
@@ -60,9 +60,7 @@ class SomfyRTS {
     // distinct SomfyRTS instances can still be given non-colliding storage by
     // configuring different values here, same as before.
     void configRTS(unsigned int EEPROM_address, unsigned long RTS_address);
-    void setHighPower(bool onOFF=true); //have to call it after initialize for RFM69HW
     bool radioOk() const { return _radioOk; }  // false if the RFM69 didn't answer during init
-    unsigned char radioVersion() const;
 
     SomfyRTS(byte pinTx, unsigned char transmitterType) {
 

@@ -7,28 +7,20 @@ namespace somfy_rts {
 static const char *const TAG = "somfy_rts";
 
 void SomfyRTSHub::setup() {
-  // Constructing SomfyRTS runs the RFM69 SPI init (see vendor/SomfyRTS.cpp
-  // initRadio()): standby, continuous-OOK mode, 433.42MHz, base power level.
-  this->radio_ = new SomfyRTS(SOMFY_RFM69_DIO2_PIN, TSR_RFM69);
-  if (!this->radio_->radioOk()) {
-    ESP_LOGE(TAG,
-             "RFM69 not responding (RegVersion=0x%02X, expected 0x24) - check the Wing's CS jumper and SPI "
-             "wiring. Somfy commands will be ignored.",
-             this->radio_->radioVersion());
+  // The shared RFM69 (components/rfm69_direct/) finishes its own setup() first
+  // (it runs at BUS priority, this component at HARDWARE) so radio.version() is
+  // already populated by the time this runs - see SomfyRTS::initRadio().
+  this->radio_ = new SomfyRTS(rfm69_direct::RFM69_DIRECT_DIO2_PIN, TSR_RFM69);
+  if (this->radio_hub_ == nullptr || !this->radio_hub_->radio_ok()) {
+    ESP_LOGE(TAG, "Shared RFM69 radio is not available - Somfy commands will be ignored.");
     this->mark_failed();
     return;
   }
-  // Must be called after construction (per the library's own contract) to engage
-  // the RFM69HCW's PA1/PA2 high-power amplifier stages.
-  this->radio_->setHighPower(true);
-  ESP_LOGI(TAG, "RFM69 detected (RegVersion=0x%02X)", this->radio_->radioVersion());
 }
 
 void SomfyRTSHub::dump_config() {
   ESP_LOGCONFIG(TAG, "Somfy RTS hub:");
-  ESP_LOGCONFIG(TAG, "  Radio: RFM69HCW, direct/continuous OOK @ 433.42MHz");
-  ESP_LOGCONFIG(TAG, "  CS pin: GPIO%d", SOMFY_RFM69_CS_PIN);
-  ESP_LOGCONFIG(TAG, "  DIO2 (data) pin: GPIO%d", SOMFY_RFM69_DIO2_PIN);
+  ESP_LOGCONFIG(TAG, "  Radio: shared RFM69 (see rfm69_direct), continuous OOK @ 433.42MHz");
 }
 
 void SomfyRTSHub::send_command(uint8_t remote_number, uint8_t command) {
